@@ -49,12 +49,6 @@
             <version>1.6.0</version>
             <classifier>mule-plugin</classifier>
         </dependency>
-        <dependency>
-            <groupId>com.mulesoft.munit</groupId>
-            <artifactId>munit-tools</artifactId>
-            <version>3.7.4</version>
-            <classifier>mule-plugin</classifier>
-        </dependency>
     </dependencies>
     
     <distributionManagement>
