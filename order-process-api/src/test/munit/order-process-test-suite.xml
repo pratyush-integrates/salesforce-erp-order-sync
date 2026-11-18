@@ -1,0 +1,142 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:http="http://www.mulesoft.org/schema/mule/http"
+      xmlns:munit="http://www.mulesoft.org/schema/mule/munit"
+      xmlns:munit-tools="http://www.mulesoft.org/schema/mule/munit-tools"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+                          http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+                          http://www.mulesoft.org/schema/mule/munit http://www.mulesoft.org/schema/mule/munit/current/mule-munit.xsd
+                          http://www.mulesoft.org/schema/mule/munit-tools http://www.mulesoft.org/schema/mule/munit-tools/current/mule-munit-tools.xsd">
+
+    <munit:config name="order-process-test-suite"/>
+
+    <!-- Stands in for both system APIs, so the real HTTP calls, retries and status checks all run.
+         The pom points salesforceSys.port and erpSys.port here. -->
+    <http:listener-config name="stub-listener">
+        <http:listener-connection host="127.0.0.1" port="${stub.port}"/>
+    </http:listener-config>
+
+    <flow name="stub-backends">
+        <http:listener config-ref="stub-listener" path="/api/*">
+            <http:response statusCode="#[vars.stubStatus]"/>
+        </http:listener>
+        <set-variable variableName="stubStatus" value="#[mocks::Backends::status(attributes.method, attributes.requestPath, attributes.queryParams, payload)]"/>
+        <set-payload value="#[output application/json --- mocks::Backends::respond(attributes.method, attributes.requestPath, attributes.queryParams, payload)]"/>
+    </flow>
+
+    <munit:test name="happy-path-creates-customer-and-order" description="No customer and no order yet: both are created and written back">
+        <munit:enable-flow-sources>
+            <munit:enable-flow-source value="stub-backends"/>
+        </munit:enable-flow-sources>
+        <munit:behavior>
+            <set-variable variableName="opportunityId" value="#[mocks::Backends::HAPPY]"/>
+        </munit:behavior>
+        <munit:execution>
+            <flow-ref name="process-order"/>
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-that expression="#[payload.erpOrderId]" is="#[MunitTools::equalTo('SO-NEW')]"/>
+            <munit-tools:assert-that expression="#[payload.status]" is="#[MunitTools::equalTo('To Deliver and Bill')]"/>
+            <munit-tools:assert-that expression="#[vars.customer.id]" is="#[MunitTools::equalTo('NEW-CUSTOMER')]"/>
+            <munit-tools:verify-call processor="flow-ref" times="1">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="name" whereValue="write-back"/>
+                </munit-tools:with-attributes>
+            </munit-tools:verify-call>
+        </munit:validation>
+    </munit:test>
+
+    <munit:test name="existing-customer-is-reused" description="The customer exists: the order uses its ID and no customer is created">
+        <munit:enable-flow-sources>
+            <munit:enable-flow-source value="stub-backends"/>
+        </munit:enable-flow-sources>
+        <munit:behavior>
+            <set-variable variableName="opportunityId" value="#[mocks::Backends::EXISTING_CUSTOMER]"/>
+        </munit:behavior>
+        <munit:execution>
+            <flow-ref name="process-order"/>
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-that expression="#[vars.customer.id]" is="#[MunitTools::equalTo('EXISTING-CUSTOMER')]"/>
+            <munit-tools:assert-that expression="#[payload.erpOrderId]" is="#[MunitTools::equalTo('SO-NEW')]"/>
+            <!-- Find order, find customer, create order. A created customer would make this 4. -->
+            <munit-tools:verify-call processor="http:request" times="3">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="config-ref" whereValue="erp-sys-config"/>
+                </munit-tools:with-attributes>
+            </munit-tools:verify-call>
+        </munit:validation>
+    </munit:test>
+
+    <munit:test name="duplicate-event-creates-nothing" description="An order already exists for this Opportunity: nothing is created and the existing order is written back">
+        <munit:enable-flow-sources>
+            <munit:enable-flow-source value="stub-backends"/>
+        </munit:enable-flow-sources>
+        <munit:behavior>
+            <set-variable variableName="opportunityId" value="#[mocks::Backends::DUPLICATE]"/>
+        </munit:behavior>
+        <munit:execution>
+            <flow-ref name="process-order"/>
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-that expression="#[payload.erpOrderId]" is="#[MunitTools::equalTo('SO-EXISTING')]"/>
+            <!-- Only the lookup reaches the ERP. -->
+            <munit-tools:verify-call processor="http:request" times="1">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="config-ref" whereValue="erp-sys-config"/>
+                </munit-tools:with-attributes>
+            </munit-tools:verify-call>
+            <munit-tools:verify-call processor="flow-ref" times="1">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="name" whereValue="write-back"/>
+                </munit-tools:with-attributes>
+            </munit-tools:verify-call>
+        </munit:validation>
+    </munit:test>
+
+    <munit:test name="erp-rejection-marks-failed-without-retry" description="The ERP rejects the order: marked Failed with the reason, and the rejected call is not retried">
+        <munit:enable-flow-sources>
+            <munit:enable-flow-source value="stub-backends"/>
+        </munit:enable-flow-sources>
+        <munit:behavior>
+            <set-variable variableName="opportunityId" value="#[mocks::Backends::ERP_REJECTS]"/>
+        </munit:behavior>
+        <munit:execution>
+            <flow-ref name="process-order"/>
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-that expression="#[payload.status]" is="#[MunitTools::equalTo('Failed')]"/>
+            <munit-tools:assert-that expression="#[payload.error]" is="#[MunitTools::containsString('Item Code')]"/>
+            <munit-tools:assert-that expression="#[vars.httpStatus]" is="#[MunitTools::equalTo(422)]"/>
+            <!-- Find order, find customer, create customer, create order: one create attempt, no retries. -->
+            <munit-tools:verify-call processor="http:request" times="4">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="config-ref" whereValue="erp-sys-config"/>
+                </munit-tools:with-attributes>
+            </munit-tools:verify-call>
+        </munit:validation>
+    </munit:test>
+
+    <munit:test name="erp-outage-retries-then-marks-failed" description="The ERP returns 503: retried, then marked Failed">
+        <munit:enable-flow-sources>
+            <munit:enable-flow-source value="stub-backends"/>
+        </munit:enable-flow-sources>
+        <munit:behavior>
+            <set-variable variableName="opportunityId" value="#[mocks::Backends::ERP_DOWN]"/>
+        </munit:behavior>
+        <munit:execution>
+            <flow-ref name="process-order"/>
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-that expression="#[payload.status]" is="#[MunitTools::equalTo('Failed')]"/>
+            <munit-tools:assert-that expression="#[vars.httpStatus]" is="#[MunitTools::equalTo(503)]"/>
+            <!-- The first call plus three retries. -->
+            <munit-tools:verify-call processor="http:request" times="4">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="config-ref" whereValue="erp-sys-config"/>
+                </munit-tools:with-attributes>
+            </munit-tools:verify-call>
+        </munit:validation>
+    </munit:test>
+</mule>

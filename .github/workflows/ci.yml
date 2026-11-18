@@ -1,0 +1,138 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  mock-erp:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Test the mock ERP
+        working-directory: salesforceIntegration
+        run: |
+          node mock-erp/server.mjs &
+          sleep 2
+          node mock-erp/test.mjs
+
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { api: salesforce-sys-api, dir: salesforceIntegration/apis/salesforce-sys-api }
+          - { api: erp-sys-api, dir: salesforceIntegration/apis/erp-sys-api }
+          - { api: order-process-api, dir: order-process-api }
+          - { api: order-status-exp-api, dir: salesforceIntegration/apis/order-status-exp-api }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: maven
+      # Maven 3.10 cannot load the Mule plugin.
+      - uses: stCarolas/setup-maven@v5
+        with:
+          maven-version: 3.9.9
+      - name: Write Maven credentials for Anypoint Exchange
+        env:
+          ANYPOINT_CLIENT_ID: ${{ secrets.ANYPOINT_CLIENT_ID }}
+          ANYPOINT_CLIENT_SECRET: ${{ secrets.ANYPOINT_CLIENT_SECRET }}
+        run: |
+          mkdir -p ~/.m2
+          cat > ~/.m2/settings.xml <<EOF
+          <settings>
+            <servers>
+              <server>
+                <id>anypoint-exchange-v3</id>
+                <username>~~~Client~~~</username>
+                <password>${ANYPOINT_CLIENT_ID}~?~${ANYPOINT_CLIENT_SECRET}</password>
+              </server>
+            </servers>
+          </settings>
+          EOF
+      # order-process-api is the app with MUnit tests, and verify runs them.
+      - name: Build and test ${{ matrix.api }}
+        run: mvn -B -f ${{ matrix.dir }}/pom.xml clean verify
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.api }}
+          path: ${{ matrix.dir }}/target/*-mule-application.jar
+
+  # Off until the repo variable DEPLOY_ENABLED is true. The ERP is a local mock, which CloudHub cannot
+  # reach, so this project runs locally. See salesforceIntegration/docs/platform-setup.md.
+  deploy-dev:
+    if: github.ref == 'refs/heads/main' && vars.DEPLOY_ENABLED == 'true'
+    needs: [build, mock-erp]
+    runs-on: ubuntu-latest
+    environment: dev
+    strategy:
+      max-parallel: 1
+      matrix:
+        include:
+          - { api: salesforce-sys-api, dir: salesforceIntegration/apis/salesforce-sys-api }
+          - { api: erp-sys-api, dir: salesforceIntegration/apis/erp-sys-api }
+          - { api: order-process-api, dir: order-process-api }
+          - { api: order-status-exp-api, dir: salesforceIntegration/apis/order-status-exp-api }
+    steps: &deploy-steps
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: maven
+      - uses: stCarolas/setup-maven@v5
+        with:
+          maven-version: 3.9.9
+      - name: Write Maven credentials for Anypoint Exchange
+        env:
+          ANYPOINT_CLIENT_ID: ${{ secrets.ANYPOINT_CLIENT_ID }}
+          ANYPOINT_CLIENT_SECRET: ${{ secrets.ANYPOINT_CLIENT_SECRET }}
+        run: |
+          mkdir -p ~/.m2
+          cat > ~/.m2/settings.xml <<EOF
+          <settings>
+            <servers>
+              <server>
+                <id>anypoint-exchange-v3</id>
+                <username>~~~Client~~~</username>
+                <password>${ANYPOINT_CLIENT_ID}~?~${ANYPOINT_CLIENT_SECRET}</password>
+              </server>
+            </servers>
+          </settings>
+          EOF
+      - name: Deploy ${{ matrix.api }}
+        env:
+          ANYPOINT_CLIENT_ID: ${{ secrets.ANYPOINT_CLIENT_ID }}
+          ANYPOINT_CLIENT_SECRET: ${{ secrets.ANYPOINT_CLIENT_SECRET }}
+          ANYPOINT_ENVIRONMENT: ${{ vars.ANYPOINT_ENVIRONMENT }}
+          CLOUDHUB_TARGET: ${{ vars.CLOUDHUB_TARGET }}
+          SF_CLIENT_ID: ${{ secrets.SF_CLIENT_ID }}
+          SF_CLIENT_SECRET: ${{ secrets.SF_CLIENT_SECRET }}
+          SF_TOKEN_URL: ${{ secrets.SF_TOKEN_URL }}
+          ERP_API_KEY: ${{ secrets.ERP_API_KEY }}
+          ERP_API_SECRET: ${{ secrets.ERP_API_SECRET }}
+        run: mvn -B -f ${{ matrix.dir }}/pom.xml deploy -DskipTests -DmuleDeploy -Pcloudhub2
+
+  # Set required reviewers on the prod environment so this waits for approval.
+  deploy-prod:
+    if: github.ref == 'refs/heads/main' && vars.DEPLOY_ENABLED == 'true'
+    needs: deploy-dev
+    runs-on: ubuntu-latest
+    environment: prod
+    strategy:
+      max-parallel: 1
+      matrix:
+        include:
+          - { api: salesforce-sys-api, dir: salesforceIntegration/apis/salesforce-sys-api }
+          - { api: erp-sys-api, dir: salesforceIntegration/apis/erp-sys-api }
+          - { api: order-process-api, dir: order-process-api }
+          - { api: order-status-exp-api, dir: salesforceIntegration/apis/order-status-exp-api }
+    steps: *deploy-steps

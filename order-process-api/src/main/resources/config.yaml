@@ -1,0 +1,31 @@
+http:
+  port: "8083"
+salesforceSys:
+  protocol: "HTTP"
+  host: "localhost"
+  port: "8081"
+erpSys:
+  protocol: "HTTP"
+  host: "localhost"
+  port: "8082"
+sysApi:
+  timeoutMs: "15000"
+retry:
+  count: "3"
+  delayMs: "2000"
+order:
+  deliveryLeadDays: "14"
+orderEvents:
+  # Set to "stopped" to run without a Salesforce org: -DorderEvents.initialState=stopped
+  initialState: "started"
+salesforce:
+  # Set in the .env file at the repo root (see .env.example). Environment values override these.
+  clientId: "set-at-startup"
+  clientSecret: "set-at-startup"
+  tokenUrl: "set-at-startup"
+# API Manager instance. Only used on CloudHub, where the platform credentials are present.
+api:
+  id: "0"
+# Sent to the APIs this one calls. Set on CloudHub, where their URLs are public.
+internal:
+  authorization: "none"

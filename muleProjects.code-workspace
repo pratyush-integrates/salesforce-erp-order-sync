@@ -1,0 +1,19 @@
+{
+    "folders": [
+        { "name": "salesforce-sys-api", "path": "salesforce-sys-api" },
+        { "name": "erp-sys-api", "path": "erp-sys-api" },
+        { "name": "order-process-api", "path": "order-process-api" },
+        { "name": "order-status-exp-api", "path": "order-status-exp-api" }
+    ],
+    "settings": {
+        "files.exclude": {
+            "**/.git": true,
+            "**/.svn": true,
+            "**/.hg": true,
+            "**/.jj": true,
+            "**/.DS_Store": true,
+            "**/Thumbs.db": true,
+            ".mule": true
+        }
+    }
+}

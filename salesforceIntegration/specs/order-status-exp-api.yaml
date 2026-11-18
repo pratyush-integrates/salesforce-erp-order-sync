@@ -1,0 +1,76 @@
+openapi: 3.0.3
+info:
+  title: Order Status Experience API
+  version: 1.0.0
+  description: Read-only order status for people and AI assistants. Exposed to Claude as MCP tools.
+servers:
+  - url: http://localhost:8084/api
+security:
+  - clientId: []
+paths:
+  /orders/failed:
+    get:
+      operationId: list_failed_orders
+      summary: List orders that failed to reach the ERP
+      parameters:
+        - name: since
+          in: query
+          description: Only return failures at or after this time. Use the start of today for "failed today".
+          schema: { type: string, format: date-time }
+      responses:
+        '200':
+          description: Failed orders, with the reason for each
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/OrderStatus' }
+        '429':
+          description: Rate limit exceeded
+        '503':
+          description: A downstream system is unavailable
+  /orders/{opportunityId}/status:
+    get:
+      operationId: get_order_status
+      summary: Get the ERP order status for an Opportunity
+      parameters:
+        - name: opportunityId
+          in: path
+          required: true
+          schema: { type: string, pattern: '^[a-zA-Z0-9]{15,18}$' }
+      responses:
+        '200':
+          description: The order status
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OrderStatus' }
+        '404':
+          description: Opportunity not found
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '429':
+          description: Rate limit exceeded
+components:
+  securitySchemes:
+    clientId:
+      type: apiKey
+      in: header
+      name: client_id
+  schemas:
+    OrderStatus:
+      type: object
+      required: [opportunityId, status]
+      properties:
+        opportunityId: { type: string }
+        opportunityName: { type: string }
+        erpOrderId: { type: string, nullable: true }
+        status: { type: string, example: Failed }
+        error: { type: string, nullable: true }
+        syncedAt: { type: string, format: date-time, nullable: true }
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code: { type: string }
+        message: { type: string }

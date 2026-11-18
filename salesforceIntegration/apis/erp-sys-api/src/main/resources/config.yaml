@@ -1,0 +1,14 @@
+http:
+  port: "8082"
+erp:
+  protocol: "HTTP"
+  host: "localhost"
+  port: "8090"
+  timeoutMs: "10000"
+  company: "Demo Manufacturing"
+  # Mock ERP values, not real secrets. Pass real ones with -Derp.apiKey=... -Derp.apiSecret=...
+  apiKey: "mock-key"
+  apiSecret: "mock-secret"
+# API Manager instance. Only used on CloudHub, where the platform credentials are present.
+api:
+  id: "0"

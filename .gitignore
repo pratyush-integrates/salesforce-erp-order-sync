@@ -1,0 +1,28 @@
+# Secrets
+.env
+*.jks
+*.p12
+secure*.yaml
+
+# Build and tool output
+target/
+.mule/
+.tooling-project/
+.mule-local/
+node_modules/
+*.hprof
+*.class
+*.jar
+.settings/
+.project
+.classpath
+.vscode/
+salesforce/.sf/
+salesforce/.sfdx/
+
+# Not part of this project
+/myaiproject-api/
+/salesforceIntegration/salesforceIntegration.code-workspace
+
+# DataWeave Playground sample inputs written by Code Builder
+**/src/test/resources/embedded-dw_*/

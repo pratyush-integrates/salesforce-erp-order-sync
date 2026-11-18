@@ -1,0 +1,128 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:api-gateway="http://www.mulesoft.org/schema/mule/api-gateway"
+      xmlns:apikit="http://www.mulesoft.org/schema/mule/mule-apikit"
+      xmlns:http="http://www.mulesoft.org/schema/mule/http"
+      xmlns:mcp="http://www.mulesoft.org/schema/mule/mcp"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xmlns:munit-tools="http://www.mulesoft.org/schema/mule/munit-tools"
+      xsi:schemaLocation="http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+                          http://www.mulesoft.org/schema/mule/api-gateway http://www.mulesoft.org/schema/mule/api-gateway/current/mule-api-gateway.xsd
+                          http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+                          http://www.mulesoft.org/schema/mule/mcp http://www.mulesoft.org/schema/mule/mcp/current/mule-mcp.xsd
+                          http://www.mulesoft.org/schema/mule/mule-apikit http://www.mulesoft.org/schema/mule/mule-apikit/current/mule-apikit.xsd
+	http://www.mulesoft.org/schema/mule/munit-tools http://www.mulesoft.org/schema/mule/munit-tools/current/mule-munit-tools.xsd">
+
+    <configuration-properties file="config.yaml"/>
+
+    <api-gateway:autodiscovery apiId="${api.id}" ignoreBasePath="true" flowRef="order-status-exp-api-main"/>
+
+    <http:listener-config name="api-listener">
+        <http:listener-connection host="0.0.0.0" port="${http.port}"/>
+    </http:listener-config>
+
+    <http:request-config name="order-process-config" responseTimeout="${orderProcess.timeoutMs}">
+        <http:request-connection protocol="${orderProcess.protocol}" host="${orderProcess.host}" port="${orderProcess.port}"/>
+    </http:request-config>
+
+    <apikit:config name="order-status-exp-api-config" api="api/order-status-exp-api.yaml"
+                   outboundHeadersMapName="outboundHeaders" httpStatusVarName="httpStatus"/>
+
+    <!-- MCP has no client ID check of its own here, so it listens on this machine only. -->
+    <http:listener-config name="mcp-listener">
+        <http:listener-connection host="${mcp.host}" port="${mcp.port}"/>
+    </http:listener-config>
+
+    <mcp:server-config name="mcp-server" serverName="order-status" serverVersion="1.0.0">
+        <mcp:streamable-http-server-connection listenerConfig="mcp-listener" mcpEndpointPath="/mcp"/>
+    </mcp:server-config>
+
+    <flow name="order-status-exp-api-main">
+        <http:listener config-ref="api-listener" path="/api/*">
+            <http:response statusCode="#[vars.httpStatus default 200]">
+                <http:headers>#[vars.outboundHeaders default {}]</http:headers>
+            </http:response>
+            <http:error-response statusCode="#[vars.httpStatus default 500]">
+                <http:body>#[payload]</http:body>
+                <http:headers>#[vars.outboundHeaders default {}]</http:headers>
+            </http:error-response>
+        </http:listener>
+        <apikit:router config-ref="order-status-exp-api-config"/>
+        <error-handler>
+            <on-error-propagate>
+                <set-variable variableName="httpStatus" value="#[mappings::Status::httpStatusFor(error.errorType.namespace, error.errorType.identifier)]"/>
+                <logger level="WARN" message="#[output text/plain --- 'Request failed: $(error.errorType.namespace):$(error.errorType.identifier) -> $(vars.httpStatus)']"/>
+                <set-payload value="#[output application/json --- { code: error.errorType.identifier, message: if (error.errorType.namespace == 'HTTP') 'The order service could not complete the request' else (error.description default 'Request failed') }]"/>
+            </on-error-propagate>
+        </error-handler>
+    </flow>
+
+    <flow name="get:\orders\failed:order-status-exp-api-config">
+        <http:request config-ref="order-process-config" method="GET" path="/api/orders">
+            <http:headers>#[{ authorization: p('internal.authorization') }]</http:headers>
+            <http:query-params>#[mappings::Status::failedQuery(attributes.queryParams.since)]</http:query-params>
+        </http:request>
+        <set-payload value="#[output application/json --- payload]"/>
+    </flow>
+
+    <flow name="get:\orders\(opportunityId)\status:order-status-exp-api-config">
+        <http:request config-ref="order-process-config" method="GET" path="#['/api/orders/$(attributes.uriParams.opportunityId)']">
+            <http:headers>#[{ authorization: p('internal.authorization') }]</http:headers>
+        </http:request>
+        <set-payload value="#[output application/json --- payload]"/>
+    <munit-tools:store-oauth-token doc:name="Store oauth token" doc:id="exlbnh" accessToken="" objectStore=""/>
+    </flow>
+
+    <!-- MCP tools. Read-only by design: Claude can look at orders but has no way to change one. -->
+    <flow name="mcp-get-order-status">
+        <mcp:tool-listener config-ref="mcp-server" name="get_order_status">
+            <mcp:description>Get the ERP order status for one Salesforce Opportunity: order number, status, failure reason and last sync time.</mcp:description>
+            <mcp:parameters-schema><![CDATA[{
+                "type": "object",
+                "properties": {
+                    "opportunityId": { "type": "string", "pattern": "^[a-zA-Z0-9]{15,18}$", "description": "Salesforce Opportunity ID, 15 or 18 characters" }
+                },
+                "required": ["opportunityId"]
+            }]]></mcp:parameters-schema>
+            <mcp:responses>
+                <mcp:text-tool-response-content text="#[output text/plain --- write(payload, 'application/json')]"/>
+            </mcp:responses>
+            <mcp:on-error-responses>
+                <mcp:text-tool-response-content text="#[output text/plain --- 'Could not get the order status: ' ++ (error.description default 'unknown error')]"/>
+            </mcp:on-error-responses>
+        </mcp:tool-listener>
+        <!-- The model chooses this value, so check it before it becomes part of a URL. -->
+        <choice>
+            <when expression="#[not ((payload.opportunityId default '') matches /^[a-zA-Z0-9]{15,18}$/)]">
+                <raise-error type="STATUS:BAD_ID" description="opportunityId must be 15 or 18 letters and digits"/>
+            </when>
+        </choice>
+        <http:request config-ref="order-process-config" method="GET" path="#['/api/orders/$(payload.opportunityId)']">
+            <http:headers>#[{ authorization: p('internal.authorization') }]</http:headers>
+        </http:request>
+        <set-payload value="#[output application/json --- payload]"/>
+    </flow>
+
+    <flow name="mcp-list-failed-orders">
+        <mcp:tool-listener config-ref="mcp-server" name="list_failed_orders">
+            <mcp:description>List orders that failed to reach the ERP, newest first, with the reason for each. To answer "failed today", set since to the start of today in UTC.</mcp:description>
+            <mcp:parameters-schema><![CDATA[{
+                "type": "object",
+                "properties": {
+                    "since": { "type": "string", "format": "date-time", "description": "Only return failures at or after this time, for example 2026-11-02T00:00:00Z" }
+                }
+            }]]></mcp:parameters-schema>
+            <mcp:responses>
+                <mcp:text-tool-response-content text="#[output text/plain --- write(payload, 'application/json')]"/>
+            </mcp:responses>
+            <mcp:on-error-responses>
+                <mcp:text-tool-response-content text="#[output text/plain --- 'Could not list failed orders: ' ++ (error.description default 'unknown error')]"/>
+            </mcp:on-error-responses>
+        </mcp:tool-listener>
+        <http:request config-ref="order-process-config" method="GET" path="/api/orders">
+            <http:headers>#[{ authorization: p('internal.authorization') }]</http:headers>
+            <http:query-params>#[mappings::Status::failedQuery(payload.since)]</http:query-params>
+        </http:request>
+        <set-payload value="#[output application/json --- payload]"/>
+    </flow>
+</mule>

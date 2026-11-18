@@ -1,0 +1,125 @@
+openapi: 3.0.3
+info:
+  title: Salesforce System API
+  version: 1.0.0
+  description: Reads Opportunities and writes ERP results back to them.
+servers:
+  - url: http://localhost:8081/api
+security:
+  - clientId: []
+paths:
+  /opportunities:
+    get:
+      operationId: listOpportunitiesByErpStatus
+      summary: List Opportunities by ERP status
+      parameters:
+        - name: erpStatus
+          in: query
+          required: true
+          schema: { type: string, pattern: '^[A-Za-z ]{1,40}$', example: Failed }
+        - name: since
+          in: query
+          description: Only return Opportunities synced at or after this time.
+          schema: { type: string, format: date-time }
+      responses:
+        '200':
+          description: Matching Opportunities
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/ErpResult' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+  /opportunities/{opportunityId}:
+    parameters:
+      - name: opportunityId
+        in: path
+        required: true
+        schema: { type: string, pattern: '^[a-zA-Z0-9]{15,18}$' }
+    get:
+      operationId: getOpportunity
+      summary: Get an Opportunity with its Account and line items
+      responses:
+        '200':
+          description: The Opportunity
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Opportunity' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+    patch:
+      operationId: updateOpportunityErpResult
+      summary: Write the ERP result back to the Opportunity
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ErpUpdate' }
+      responses:
+        '204':
+          description: Updated
+        '404': { $ref: '#/components/responses/NotFound' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+components:
+  securitySchemes:
+    clientId:
+      type: apiKey
+      in: header
+      name: client_id
+  responses:
+    NotFound:
+      description: Not found
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Unavailable:
+      description: Salesforce is unavailable. Safe to retry.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+  schemas:
+    Opportunity:
+      type: object
+      required: [id, name, stage, lineItems]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        stage: { type: string, example: Closed Won }
+        accountId: { type: string, nullable: true }
+        accountName: { type: string, nullable: true }
+        erpOrderId: { type: string, nullable: true }
+        erpStatus: { type: string, nullable: true }
+        erpError: { type: string, nullable: true }
+        syncedAt: { type: string, format: date-time, nullable: true }
+        lineItems:
+          type: array
+          items:
+            type: object
+            required: [productCode, quantity, unitPrice]
+            properties:
+              productCode: { type: string, example: WIDGET-100 }
+              quantity: { type: number }
+              unitPrice: { type: number }
+    ErpUpdate:
+      type: object
+      required: [erpStatus]
+      properties:
+        erpOrderId: { type: string, nullable: true }
+        erpStatus: { type: string, example: To Deliver and Bill }
+        erpError: { type: string, nullable: true, maxLength: 255 }
+    ErpResult:
+      type: object
+      required: [opportunityId, opportunityName, erpStatus]
+      properties:
+        opportunityId: { type: string }
+        opportunityName: { type: string }
+        erpOrderId: { type: string, nullable: true }
+        erpStatus: { type: string }
+        erpError: { type: string, nullable: true }
+        syncedAt: { type: string, format: date-time, nullable: true }
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code: { type: string }
+        message: { type: string }

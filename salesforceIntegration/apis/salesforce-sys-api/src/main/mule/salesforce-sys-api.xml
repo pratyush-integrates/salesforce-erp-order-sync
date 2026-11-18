@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:api-gateway="http://www.mulesoft.org/schema/mule/api-gateway"
+      xmlns:apikit="http://www.mulesoft.org/schema/mule/mule-apikit"
+      xmlns:http="http://www.mulesoft.org/schema/mule/http"
+      xmlns:salesforce="http://www.mulesoft.org/schema/mule/salesforce"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+                          http://www.mulesoft.org/schema/mule/api-gateway http://www.mulesoft.org/schema/mule/api-gateway/current/mule-api-gateway.xsd
+                          http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+                          http://www.mulesoft.org/schema/mule/mule-apikit http://www.mulesoft.org/schema/mule/mule-apikit/current/mule-apikit.xsd
+                          http://www.mulesoft.org/schema/mule/salesforce http://www.mulesoft.org/schema/mule/salesforce/current/mule-salesforce.xsd">
+
+    <configuration-properties file="config.yaml"/>
+
+    <api-gateway:autodiscovery apiId="${api.id}" ignoreBasePath="true" flowRef="salesforce-sys-api-main"/>
+
+    <http:listener-config name="api-listener">
+        <http:listener-connection host="0.0.0.0" port="${http.port}"/>
+    </http:listener-config>
+
+    <salesforce:sfdc-config name="salesforce-config">
+        <salesforce:oauth-client-credentials-connection>
+            <salesforce:oauth-client-credentials clientId="${salesforce.clientId}"
+                                                 clientSecret="${salesforce.clientSecret}"
+                                                 tokenUrl="${salesforce.tokenUrl}"/>
+        </salesforce:oauth-client-credentials-connection>
+    </salesforce:sfdc-config>
+
+    <apikit:config name="salesforce-sys-api-config" api="api/salesforce-sys-api.yaml"
+                   outboundHeadersMapName="outboundHeaders" httpStatusVarName="httpStatus"/>
+
+    <flow name="salesforce-sys-api-main">
+        <http:listener config-ref="api-listener" path="/api/*">
+            <http:response statusCode="#[vars.httpStatus default 200]">
+                <http:headers>#[vars.outboundHeaders default {}]</http:headers>
+            </http:response>
+            <http:error-response statusCode="#[vars.httpStatus default 500]">
+                <http:body>#[payload]</http:body>
+                <http:headers>#[vars.outboundHeaders default {}]</http:headers>
+            </http:error-response>
+        </http:listener>
+        <apikit:router config-ref="salesforce-sys-api-config"/>
+        <error-handler>
+            <on-error-propagate>
+                <set-variable variableName="httpStatus" value="#[mappings::Salesforce::httpStatusFor(error.errorType.namespace, error.errorType.identifier)]"/>
+                <logger level="WARN" message="#[output text/plain --- 'Salesforce request failed: $(error.errorType.namespace):$(error.errorType.identifier) -> $(vars.httpStatus)']"/>
+                <set-payload value="#[output application/json --- { code: error.errorType.identifier, message: error.description default 'Request failed' }]"/>
+            </on-error-propagate>
+        </error-handler>
+    </flow>
+
+    <flow name="get:\opportunities:salesforce-sys-api-config">
+        <salesforce:query config-ref="salesforce-config">
+            <salesforce:salesforce-query>#[mappings::Salesforce::resultsQuery(attributes.queryParams.since)]</salesforce:salesforce-query>
+            <salesforce:parameters>#[output application/java --- mappings::Salesforce::resultsParams(attributes.queryParams.erpStatus, attributes.queryParams.since)]</salesforce:parameters>
+        </salesforce:query>
+        <set-payload value="#[output application/json --- payload map mappings::Salesforce::toErpResult($)]"/>
+    </flow>
+
+    <flow name="get:\opportunities\(opportunityId):salesforce-sys-api-config">
+        <!-- opportunityId is safe to bind here: the spec restricts it to letters and digits. -->
+        <salesforce:query config-ref="salesforce-config">
+            <salesforce:salesforce-query>SELECT Id, Name, StageName, AccountId, Account.Name, ERP_Order_Id__c, ERP_Status__c, ERP_Error__c, ERP_Synced_At__c, (SELECT ProductCode, Quantity, UnitPrice FROM OpportunityLineItems) FROM Opportunity WHERE Id = ':id'</salesforce:salesforce-query>
+            <salesforce:parameters>#[output application/java --- { id: attributes.uriParams.opportunityId }]</salesforce:parameters>
+        </salesforce:query>
+        <set-variable variableName="records" value="#[output application/java --- payload as Array]"/>
+        <choice>
+            <when expression="#[isEmpty(vars.records)]">
+                <raise-error type="SF:NOT_FOUND" description="Opportunity not found"/>
+            </when>
+        </choice>
+        <set-payload value="#[output application/json --- mappings::Salesforce::toOpportunity(vars.records[0])]"/>
+    </flow>
+
+    <flow name="patch:\opportunities\(opportunityId):application\json:salesforce-sys-api-config">
+        <salesforce:update config-ref="salesforce-config" type="Opportunity">
+            <salesforce:records>#[output application/java --- [mappings::Salesforce::toUpdateRecord(attributes.uriParams.opportunityId, payload, now())]]</salesforce:records>
+        </salesforce:update>
+        <choice>
+            <when expression="#[not (payload.items[0].successful default false)]">
+                <raise-error type="SF:UPDATE_FAILED" description="#[output text/plain --- 'Salesforce rejected the update: ' ++ (payload.items[0].message default 'no reason given')]"/>
+            </when>
+        </choice>
+        <set-variable variableName="httpStatus" value="#[204]"/>
+        <set-payload value="#[null]"/>
+    </flow>
+</mule>

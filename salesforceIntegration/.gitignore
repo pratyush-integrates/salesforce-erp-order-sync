@@ -1,0 +1,11 @@
+target/
+.mule/
+.env
+*.jks
+*.p12
+secure*.yaml
+salesforce/.sf/
+salesforce/.sfdx/
+node_modules/
+.mule-local/
+*.hprof

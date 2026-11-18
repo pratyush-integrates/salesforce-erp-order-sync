@@ -1,0 +1,171 @@
+openapi: 3.0.3
+info:
+  title: ERP System API
+  version: 1.0.0
+  description: Hides the ERP behind a stable contract. Today the ERP is a mock with ERPNext's REST shape.
+servers:
+  - url: http://localhost:8082/api
+security:
+  - clientId: []
+paths:
+  /customers:
+    get:
+      operationId: findCustomer
+      summary: Find a customer by Salesforce Account ID
+      parameters:
+        - name: sfAccountId
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Matching customers. Empty if there are none.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Customer' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+    post:
+      operationId: createCustomer
+      summary: Create a customer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/NewCustomer' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Customer' }
+        '409': { $ref: '#/components/responses/Duplicate' }
+        '422': { $ref: '#/components/responses/Rejected' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+  /sales-orders:
+    get:
+      operationId: findSalesOrder
+      summary: Find a sales order by Salesforce Opportunity ID
+      parameters:
+        - name: sfOpportunityId
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Matching orders. Empty if there are none.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/SalesOrder' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+    post:
+      operationId: createSalesOrder
+      summary: Create a sales order
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/NewSalesOrder' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SalesOrder' }
+        '409': { $ref: '#/components/responses/Duplicate' }
+        '422': { $ref: '#/components/responses/Rejected' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+  /sales-orders/{orderId}:
+    get:
+      operationId: getSalesOrder
+      summary: Get a sales order and its status
+      parameters:
+        - name: orderId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: The order
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SalesOrder' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+components:
+  securitySchemes:
+    clientId:
+      type: apiKey
+      in: header
+      name: client_id
+  responses:
+    Duplicate:
+      description: Already exists. Safe to look the record up and continue.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Rejected:
+      description: The ERP rejected the data. Retrying will not help.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NotFound:
+      description: Not found
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Unavailable:
+      description: The ERP is down or timed out. Safe to retry.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+  schemas:
+    NewCustomer:
+      type: object
+      required: [name, sfAccountId]
+      properties:
+        name: { type: string }
+        sfAccountId: { type: string }
+    Customer:
+      allOf:
+        - $ref: '#/components/schemas/NewCustomer'
+        - type: object
+          required: [id]
+          properties:
+            id: { type: string, example: Acme Corp }
+    NewSalesOrder:
+      type: object
+      required: [customerId, sfOpportunityId, orderDate, deliveryDate, items]
+      properties:
+        customerId: { type: string }
+        sfOpportunityId: { type: string }
+        orderDate: { type: string, format: date }
+        deliveryDate: { type: string, format: date }
+        items:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            required: [itemCode, quantity, unitPrice]
+            properties:
+              itemCode: { type: string, example: WIDGET-100 }
+              quantity: { type: number }
+              unitPrice: { type: number }
+    SalesOrder:
+      allOf:
+        - $ref: '#/components/schemas/NewSalesOrder'
+        - type: object
+          required: [id, status]
+          properties:
+            id: { type: string, example: SAL-ORD-2026-00001 }
+            status: { type: string, example: To Deliver and Bill }
+            total: { type: number }
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code: { type: string }
+        message: { type: string }

@@ -1,0 +1,10 @@
+http:
+  port: "8081"
+salesforce:
+  # Set in the .env file at the repo root (see .env.example). Environment values override these.
+  clientId: "set-at-startup"
+  clientSecret: "set-at-startup"
+  tokenUrl: "set-at-startup"
+# API Manager instance. Only used on CloudHub, where the platform credentials are present.
+api:
+  id: "0"

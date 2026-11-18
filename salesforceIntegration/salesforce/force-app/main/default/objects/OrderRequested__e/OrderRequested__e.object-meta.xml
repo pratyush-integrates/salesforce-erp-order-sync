@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomObject xmlns="http://soap.sforce.com/2006/04/metadata">
+    <deploymentStatus>Deployed</deploymentStatus>
+    <description>Published when an Opportunity becomes Closed Won. Consumed by order-process-api.</description>
+    <eventType>HighVolume</eventType>
+    <label>Order Requested</label>
+    <pluralLabel>Orders Requested</pluralLabel>
+    <publishBehavior>PublishAfterCommit</publishBehavior>
+</CustomObject>

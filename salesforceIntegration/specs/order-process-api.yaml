@@ -1,0 +1,104 @@
+openapi: 3.0.3
+info:
+  title: Order Process API
+  version: 1.0.0
+  description: >-
+    Turns a Closed Won Opportunity into an ERP order. It normally runs from the OrderRequested__e
+    Platform Event. POST /orders/sync runs the same logic by hand, which is how a failed order is replayed.
+servers:
+  - url: http://localhost:8083/api
+security:
+  - clientId: []
+paths:
+  /orders/sync:
+    post:
+      operationId: syncOrder
+      summary: Create the ERP order for an Opportunity, or return the existing one
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [opportunityId]
+              properties:
+                opportunityId: { type: string, pattern: '^[a-zA-Z0-9]{15,18}$' }
+      responses:
+        '200':
+          description: The order now exists in the ERP, whether from this call or an earlier one.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OrderStatus' }
+        '422':
+          description: The sync failed and the Opportunity is marked Failed.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OrderStatus' }
+        '503':
+          description: Retries ran out and the Opportunity is marked Failed.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OrderStatus' }
+  /orders:
+    get:
+      operationId: listOrders
+      summary: List orders by status
+      parameters:
+        - name: status
+          in: query
+          required: true
+          schema: { type: string, example: Failed }
+        - name: since
+          in: query
+          schema: { type: string, format: date-time }
+      responses:
+        '200':
+          description: Matching orders
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/OrderStatus' }
+  /orders/{opportunityId}:
+    get:
+      operationId: getOrder
+      summary: Get the order status for an Opportunity
+      parameters:
+        - name: opportunityId
+          in: path
+          required: true
+          schema: { type: string, pattern: '^[a-zA-Z0-9]{15,18}$' }
+      responses:
+        '200':
+          description: The order status
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OrderStatus' }
+        '404':
+          description: Opportunity not found
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+components:
+  securitySchemes:
+    clientId:
+      type: apiKey
+      in: header
+      name: client_id
+  schemas:
+    OrderStatus:
+      type: object
+      required: [opportunityId, status]
+      properties:
+        opportunityId: { type: string }
+        opportunityName: { type: string }
+        erpOrderId: { type: string, nullable: true }
+        status: { type: string, example: To Deliver and Bill }
+        error: { type: string, nullable: true }
+        syncedAt: { type: string, format: date-time, nullable: true }
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code: { type: string }
+        message: { type: string }

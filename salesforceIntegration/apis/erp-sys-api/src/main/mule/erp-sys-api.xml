@@ -1,0 +1,115 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:api-gateway="http://www.mulesoft.org/schema/mule/api-gateway"
+      xmlns:apikit="http://www.mulesoft.org/schema/mule/mule-apikit"
+      xmlns:http="http://www.mulesoft.org/schema/mule/http"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+                          http://www.mulesoft.org/schema/mule/api-gateway http://www.mulesoft.org/schema/mule/api-gateway/current/mule-api-gateway.xsd
+                          http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+                          http://www.mulesoft.org/schema/mule/mule-apikit http://www.mulesoft.org/schema/mule/mule-apikit/current/mule-apikit.xsd">
+
+    <configuration-properties file="config.yaml"/>
+
+    <api-gateway:autodiscovery apiId="${api.id}" ignoreBasePath="true" flowRef="erp-sys-api-main"/>
+
+    <http:listener-config name="api-listener">
+        <http:listener-connection host="0.0.0.0" port="${http.port}"/>
+    </http:listener-config>
+
+    <http:request-config name="erp-config" responseTimeout="${erp.timeoutMs}">
+        <http:request-connection protocol="${erp.protocol}" host="${erp.host}" port="${erp.port}"/>
+    </http:request-config>
+
+    <apikit:config name="erp-sys-api-config" api="api/erp-sys-api.yaml"
+                   outboundHeadersMapName="outboundHeaders" httpStatusVarName="httpStatus"/>
+
+    <flow name="erp-sys-api-main">
+        <http:listener config-ref="api-listener" path="/api/*">
+            <http:response statusCode="#[vars.httpStatus default 200]">
+                <http:headers>#[vars.outboundHeaders default {}]</http:headers>
+            </http:response>
+            <http:error-response statusCode="#[vars.httpStatus default 500]">
+                <http:body>#[payload]</http:body>
+                <http:headers>#[vars.outboundHeaders default {}]</http:headers>
+            </http:error-response>
+        </http:listener>
+        <apikit:router config-ref="erp-sys-api-config"/>
+        <error-handler>
+            <on-error-propagate>
+                <set-variable variableName="httpStatus" value="#[mappings::Erp::httpStatusFor(error.errorType.namespace, error.errorType.identifier)]"/>
+                <logger level="WARN" message="#[output text/plain --- 'ERP request failed: $(error.errorType.namespace):$(error.errorType.identifier) -> $(vars.httpStatus)']"/>
+                <set-payload value="#[output application/json --- { code: error.errorType.identifier, message: error.description default 'Request failed' }]"/>
+            </on-error-propagate>
+        </error-handler>
+    </flow>
+
+    <flow name="get:\customers:erp-sys-api-config">
+        <set-variable variableName="erpMethod" value="GET"/>
+        <set-variable variableName="erpPath" value="/api/resource/Customer"/>
+        <set-variable variableName="erpQuery" value="#[mappings::Erp::byField('custom_sf_account_id', attributes.queryParams.sfAccountId)]"/>
+        <flow-ref name="erp-call"/>
+        <set-payload value="#[output application/json --- payload.data map mappings::Erp::toCustomer($)]"/>
+    </flow>
+
+    <flow name="post:\customers:application\json:erp-sys-api-config">
+        <set-payload value="#[output application/json --- mappings::Erp::toErpCustomer(payload)]"/>
+        <set-variable variableName="erpMethod" value="POST"/>
+        <set-variable variableName="erpPath" value="/api/resource/Customer"/>
+        <flow-ref name="erp-call"/>
+        <set-variable variableName="httpStatus" value="#[201]"/>
+        <set-payload value="#[output application/json --- mappings::Erp::toCustomer(payload.data)]"/>
+    </flow>
+
+    <flow name="get:\sales-orders:erp-sys-api-config">
+        <set-variable variableName="erpMethod" value="GET"/>
+        <set-variable variableName="erpPath" value="/api/resource/Sales%20Order"/>
+        <set-variable variableName="erpQuery" value="#[mappings::Erp::byField('custom_sf_opportunity_id', attributes.queryParams.sfOpportunityId)]"/>
+        <flow-ref name="erp-call"/>
+        <set-payload value="#[output application/json --- payload.data map mappings::Erp::toSalesOrder($)]"/>
+    </flow>
+
+    <flow name="post:\sales-orders:application\json:erp-sys-api-config">
+        <set-payload value="#[output application/json --- mappings::Erp::toErpSalesOrder(payload, p('erp.company'))]"/>
+        <set-variable variableName="erpMethod" value="POST"/>
+        <set-variable variableName="erpPath" value="/api/resource/Sales%20Order"/>
+        <flow-ref name="erp-call"/>
+        <set-variable variableName="httpStatus" value="#[201]"/>
+        <set-payload value="#[output application/json --- mappings::Erp::toSalesOrder(payload.data)]"/>
+    </flow>
+
+    <flow name="get:\sales-orders\(orderId):erp-sys-api-config">
+        <set-variable variableName="erpMethod" value="GET"/>
+        <set-variable variableName="erpPath" value="#['/api/resource/Sales%20Order/' ++ dw::core::URL::encodeURIComponent(attributes.uriParams.orderId)]"/>
+        <flow-ref name="erp-call"/>
+        <set-payload value="#[output application/json --- mappings::Erp::toSalesOrder(payload.data)]"/>
+    </flow>
+
+    <!-- The one place that talks to the ERP. Turns its status codes into this API's error types. -->
+    <sub-flow name="erp-call">
+        <http:request config-ref="erp-config" method="#[vars.erpMethod]" path="#[vars.erpPath]">
+            <http:headers>#[{ authorization: 'token ' ++ p('erp.apiKey') ++ ':' ++ p('erp.apiSecret'), accept: 'application/json' }]</http:headers>
+            <http:query-params>#[vars.erpQuery default {}]</http:query-params>
+            <http:response-validator>
+                <http:success-status-code-validator values="100..599"/>
+            </http:response-validator>
+        </http:request>
+        <choice>
+            <when expression="#[attributes.statusCode == 409]">
+                <raise-error type="ERP:DUPLICATE" description="#[payload.message default 'Already exists']"/>
+            </when>
+            <when expression="#[attributes.statusCode == 417]">
+                <raise-error type="ERP:REJECTED" description="#[payload.message default 'The ERP rejected the data']"/>
+            </when>
+            <when expression="#[attributes.statusCode == 404]">
+                <raise-error type="ERP:NOT_FOUND" description="#[payload.message default 'Not found']"/>
+            </when>
+            <when expression="#[attributes.statusCode == 401 or attributes.statusCode == 403]">
+                <raise-error type="ERP:AUTH" description="The ERP refused this API's credentials"/>
+            </when>
+            <when expression="#[attributes.statusCode >= 300]">
+                <raise-error type="ERP:UNAVAILABLE" description="#[output text/plain --- 'The ERP returned $(attributes.statusCode)']"/>
+            </when>
+        </choice>
+    </sub-flow>
+</mule>

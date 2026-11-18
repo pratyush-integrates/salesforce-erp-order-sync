@@ -1,0 +1,277 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:api-gateway="http://www.mulesoft.org/schema/mule/api-gateway"
+      xmlns:apikit="http://www.mulesoft.org/schema/mule/mule-apikit"
+      xmlns:http="http://www.mulesoft.org/schema/mule/http"
+      xmlns:salesforce="http://www.mulesoft.org/schema/mule/salesforce"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+                          http://www.mulesoft.org/schema/mule/api-gateway http://www.mulesoft.org/schema/mule/api-gateway/current/mule-api-gateway.xsd
+                          http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+                          http://www.mulesoft.org/schema/mule/mule-apikit http://www.mulesoft.org/schema/mule/mule-apikit/current/mule-apikit.xsd
+                          http://www.mulesoft.org/schema/mule/salesforce http://www.mulesoft.org/schema/mule/salesforce/current/mule-salesforce.xsd">
+
+    <configuration-properties file="config.yaml"/>
+
+    <api-gateway:autodiscovery apiId="${api.id}" ignoreBasePath="true" flowRef="order-process-api-main"/>
+
+    <http:listener-config name="api-listener">
+        <http:listener-connection host="0.0.0.0" port="${http.port}"/>
+    </http:listener-config>
+
+    <http:request-config name="salesforce-sys-config" responseTimeout="${sysApi.timeoutMs}">
+        <http:request-connection protocol="${salesforceSys.protocol}" host="${salesforceSys.host}" port="${salesforceSys.port}"/>
+    </http:request-config>
+
+    <http:request-config name="erp-sys-config" responseTimeout="${sysApi.timeoutMs}">
+        <http:request-connection protocol="${erpSys.protocol}" host="${erpSys.host}" port="${erpSys.port}"/>
+    </http:request-config>
+
+    <salesforce:sfdc-config name="salesforce-config">
+        <salesforce:oauth-client-credentials-connection>
+            <salesforce:oauth-client-credentials clientId="${salesforce.clientId}"
+                                                 clientSecret="${salesforce.clientSecret}"
+                                                 tokenUrl="${salesforce.tokenUrl}"/>
+        </salesforce:oauth-client-credentials-connection>
+    </salesforce:sfdc-config>
+
+    <apikit:config name="order-process-api-config" api="api/order-process-api.yaml"
+                   outboundHeadersMapName="outboundHeaders" httpStatusVarName="httpStatus"/>
+
+    <flow name="order-process-api-main">
+        <http:listener config-ref="api-listener" path="/api/*">
+            <http:response statusCode="#[vars.httpStatus default 200]">
+                <http:headers>#[vars.outboundHeaders default {}]</http:headers>
+            </http:response>
+            <http:error-response statusCode="#[vars.httpStatus default 500]">
+                <http:body>#[payload]</http:body>
+                <http:headers>#[vars.outboundHeaders default {}]</http:headers>
+            </http:error-response>
+        </http:listener>
+        <apikit:router config-ref="order-process-api-config"/>
+        <error-handler>
+            <on-error-propagate>
+                <set-variable variableName="httpStatus" value="#[mappings::Order::httpStatusFor(error.errorType.namespace, error.errorType.identifier)]"/>
+                <logger level="WARN" message="#[output text/plain --- 'Request failed: $(error.errorType.namespace):$(error.errorType.identifier) -> $(vars.httpStatus)']"/>
+                <set-payload value="#[output application/json --- { code: error.errorType.identifier, message: error.description default 'Request failed' }]"/>
+            </on-error-propagate>
+        </error-handler>
+    </flow>
+
+    <!-- Entry point 1: the Platform Event. Keep this app on one replica, or every replica consumes every event. -->
+    <flow name="order-requested-listener" initialState="${orderEvents.initialState}">
+        <salesforce:replay-channel-listener config-ref="salesforce-config"
+                                            streamingChannel="/event/OrderRequested__e"
+                                            replayOption="ONLY_NEW"
+                                            autoReplay="true"/>
+        <set-variable variableName="opportunityId" value="#[payload.data.payload.OpportunityId__c]"/>
+        <logger level="INFO" message="#[output text/plain --- 'Event received for Opportunity $(vars.opportunityId)']"/>
+        <flow-ref name="process-order"/>
+        <error-handler>
+            <!-- Continue, so one bad event cannot block the ones behind it. -->
+            <on-error-continue>
+                <logger level="ERROR" message="#[output text/plain --- 'Could not process event for Opportunity $(vars.opportunityId default &quot;unknown&quot;): $(error.description default &quot;&quot;)']"/>
+            </on-error-continue>
+        </error-handler>
+    </flow>
+
+    <!-- Entry point 2: the same logic by hand, used to replay a failed order. -->
+    <flow name="post:\orders\sync:application\json:order-process-api-config">
+        <set-variable variableName="opportunityId" value="#[payload.opportunityId]"/>
+        <flow-ref name="process-order"/>
+    </flow>
+
+    <flow name="get:\orders:order-process-api-config">
+        <set-variable variableName="callMethod" value="GET"/>
+        <set-variable variableName="callPath" value="/api/opportunities"/>
+        <set-variable variableName="callQuery" value="#[mappings::Order::resultsQuery(attributes.queryParams.status, attributes.queryParams.since)]"/>
+        <flow-ref name="call-salesforce-sys"/>
+        <set-payload value="#[output application/json --- payload map mappings::Order::fromErpResult($)]"/>
+    </flow>
+
+    <flow name="get:\orders\(opportunityId):order-process-api-config">
+        <set-variable variableName="opportunityId" value="#[attributes.uriParams.opportunityId]"/>
+        <flow-ref name="read-opportunity"/>
+        <set-payload value="#[output application/json --- mappings::Order::fromOpportunity(vars.opportunity)]"/>
+    </flow>
+
+    <!-- The order logic. Safe to run any number of times for the same Opportunity. -->
+    <flow name="process-order">
+        <flow-ref name="read-opportunity"/>
+        <choice>
+            <when expression="#[mappings::Order::validationError(vars.opportunity) != null]">
+                <raise-error type="ORDER:BAD_DATA" description="#[mappings::Order::validationError(vars.opportunity)]"/>
+            </when>
+        </choice>
+
+        <flow-ref name="find-sales-order"/>
+        <choice>
+            <when expression="#[vars.salesOrder != null]">
+                <logger level="INFO" message="#[output text/plain --- 'Opportunity $(vars.opportunityId) already has order $(vars.salesOrder.id). Creating nothing.']"/>
+            </when>
+            <otherwise>
+                <flow-ref name="find-or-create-customer"/>
+                <flow-ref name="create-sales-order"/>
+            </otherwise>
+        </choice>
+
+        <set-payload value="#[output application/json --- { erpOrderId: vars.salesOrder.id, erpStatus: vars.salesOrder.status, erpError: null }]"/>
+        <flow-ref name="write-back"/>
+        <choice>
+            <when expression="#[attributes.statusCode >= 300]">
+                <raise-error type="ORDER:UPSTREAM" description="#[output text/plain --- 'salesforce-sys-api returned $(attributes.statusCode) on write-back']"/>
+            </when>
+        </choice>
+        <logger level="INFO" message="#[output text/plain --- 'Opportunity $(vars.opportunityId) synced to order $(vars.salesOrder.id)']"/>
+        <set-payload value="#[output application/json --- mappings::Order::successResult(vars.opportunity, vars.salesOrder)]"/>
+        <error-handler>
+            <on-error-continue type="ORDER:BAD_DATA, ORDER:UPSTREAM, MULE:RETRY_EXHAUSTED">
+                <set-variable variableName="failure" value="#[output text/plain --- mappings::Order::failureReason(error.errorType.identifier, error.description)]"/>
+                <logger level="ERROR" message="#[output text/plain --- 'Order sync FAILED for Opportunity $(vars.opportunityId): $(vars.failure)']"/>
+                <set-variable variableName="httpStatus" value="#[if (error.errorType.identifier == 'BAD_DATA') 422 else 503]"/>
+                <try>
+                    <set-payload value="#[output application/json --- { erpStatus: 'Failed', erpError: vars.failure }]"/>
+                    <flow-ref name="write-back"/>
+                    <error-handler>
+                        <on-error-continue>
+                            <logger level="ERROR" message="#[output text/plain --- 'ALERT: could not mark Opportunity $(vars.opportunityId) as Failed in Salesforce. Replay it once Salesforce is back.']"/>
+                        </on-error-continue>
+                    </error-handler>
+                </try>
+                <set-payload value="#[output application/json --- mappings::Order::failureResult(vars.opportunityId, vars.opportunity, vars.failure)]"/>
+            </on-error-continue>
+        </error-handler>
+    </flow>
+
+    <sub-flow name="read-opportunity">
+        <set-variable variableName="callMethod" value="GET"/>
+        <set-variable variableName="callPath" value="#[output text/plain --- '/api/opportunities/$(vars.opportunityId)']"/>
+        <set-variable variableName="callQuery" value="#[{}]"/>
+        <flow-ref name="call-salesforce-sys"/>
+        <choice>
+            <when expression="#[attributes.statusCode == 404]">
+                <raise-error type="ORDER:NOT_FOUND" description="#[output text/plain --- 'Opportunity $(vars.opportunityId) not found']"/>
+            </when>
+            <when expression="#[attributes.statusCode >= 300]">
+                <raise-error type="ORDER:UPSTREAM" description="#[output text/plain --- 'salesforce-sys-api returned $(attributes.statusCode) reading the Opportunity']"/>
+            </when>
+        </choice>
+        <set-variable variableName="opportunity" value="#[payload]"/>
+    </sub-flow>
+
+    <sub-flow name="find-sales-order">
+        <set-variable variableName="callMethod" value="GET"/>
+        <set-variable variableName="callPath" value="/api/sales-orders"/>
+        <set-variable variableName="callQuery" value="#[{ sfOpportunityId: vars.opportunityId }]"/>
+        <flow-ref name="call-erp-sys"/>
+        <flow-ref name="fail-on-erp-error"/>
+        <set-variable variableName="salesOrder" value="#[payload[0]]"/>
+    </sub-flow>
+
+    <sub-flow name="find-customer">
+        <set-variable variableName="callMethod" value="GET"/>
+        <set-variable variableName="callPath" value="/api/customers"/>
+        <set-variable variableName="callQuery" value="#[{ sfAccountId: vars.opportunity.accountId }]"/>
+        <flow-ref name="call-erp-sys"/>
+        <flow-ref name="fail-on-erp-error"/>
+        <set-variable variableName="customer" value="#[payload[0]]"/>
+    </sub-flow>
+
+    <sub-flow name="find-or-create-customer">
+        <flow-ref name="find-customer"/>
+        <choice>
+            <when expression="#[vars.customer == null]">
+                <set-payload value="#[output application/json --- { name: vars.opportunity.accountName, sfAccountId: vars.opportunity.accountId }]"/>
+                <set-variable variableName="callMethod" value="POST"/>
+                <set-variable variableName="callPath" value="/api/customers"/>
+                <set-variable variableName="callQuery" value="#[{}]"/>
+                <flow-ref name="call-erp-sys"/>
+                <choice>
+                    <!-- 409: another run created it first, so use that one. -->
+                    <when expression="#[attributes.statusCode == 409]">
+                        <flow-ref name="find-customer"/>
+                    </when>
+                    <otherwise>
+                        <flow-ref name="fail-on-erp-error"/>
+                        <set-variable variableName="customer" value="#[payload]"/>
+                    </otherwise>
+                </choice>
+            </when>
+        </choice>
+    </sub-flow>
+
+    <sub-flow name="create-sales-order">
+        <set-payload value="#[output application/json --- mappings::Order::toNewSalesOrder(vars.opportunity, vars.customer.id, now() as Date, p('order.deliveryLeadDays'))]"/>
+        <set-variable variableName="callMethod" value="POST"/>
+        <set-variable variableName="callPath" value="/api/sales-orders"/>
+        <set-variable variableName="callQuery" value="#[{}]"/>
+        <flow-ref name="call-erp-sys"/>
+        <choice>
+            <!-- 409: another run created it first, so use that one. -->
+            <when expression="#[attributes.statusCode == 409]">
+                <flow-ref name="find-sales-order"/>
+            </when>
+            <otherwise>
+                <flow-ref name="fail-on-erp-error"/>
+                <set-variable variableName="salesOrder" value="#[payload]"/>
+            </otherwise>
+        </choice>
+    </sub-flow>
+
+    <sub-flow name="fail-on-erp-error">
+        <choice>
+            <when expression="#[attributes.statusCode == 422]">
+                <raise-error type="ORDER:BAD_DATA" description="#[payload.message default 'The ERP rejected the order']"/>
+            </when>
+            <when expression="#[attributes.statusCode >= 300]">
+                <raise-error type="ORDER:UPSTREAM" description="#[output text/plain --- 'erp-sys-api returned $(attributes.statusCode)']"/>
+            </when>
+        </choice>
+    </sub-flow>
+
+    <sub-flow name="write-back">
+        <set-variable variableName="callMethod" value="PATCH"/>
+        <set-variable variableName="callPath" value="#[output text/plain --- '/api/opportunities/$(vars.opportunityId)']"/>
+        <set-variable variableName="callQuery" value="#[{}]"/>
+        <flow-ref name="call-salesforce-sys"/>
+    </sub-flow>
+
+    <!-- Both callers retry only short-lived failures: timeouts, connection errors, 502, 503, 504.
+         Other responses return to the caller, so bad data is never retried. -->
+    <sub-flow name="call-salesforce-sys">
+        <until-successful maxRetries="${retry.count}" millisBetweenRetries="${retry.delayMs}">
+            <logger level="INFO" message="#[output text/plain --- 'salesforce-sys-api: $(vars.callMethod) $(vars.callPath)']"/>
+            <http:request config-ref="salesforce-sys-config" method="#[vars.callMethod]" path="#[vars.callPath]">
+                <http:headers>#[{ authorization: p('internal.authorization') }]</http:headers>
+                <http:query-params>#[vars.callQuery default {}]</http:query-params>
+                <http:response-validator>
+                    <http:success-status-code-validator values="100..599"/>
+                </http:response-validator>
+            </http:request>
+            <flow-ref name="fail-if-transient"/>
+        </until-successful>
+    </sub-flow>
+
+    <sub-flow name="call-erp-sys">
+        <until-successful maxRetries="${retry.count}" millisBetweenRetries="${retry.delayMs}">
+            <logger level="INFO" message="#[output text/plain --- 'erp-sys-api: $(vars.callMethod) $(vars.callPath)']"/>
+            <http:request config-ref="erp-sys-config" method="#[vars.callMethod]" path="#[vars.callPath]">
+                <http:headers>#[{ authorization: p('internal.authorization') }]</http:headers>
+                <http:query-params>#[vars.callQuery default {}]</http:query-params>
+                <http:response-validator>
+                    <http:success-status-code-validator values="100..599"/>
+                </http:response-validator>
+            </http:request>
+            <flow-ref name="fail-if-transient"/>
+        </until-successful>
+    </sub-flow>
+
+    <sub-flow name="fail-if-transient">
+        <choice>
+            <when expression="#[[502, 503, 504] contains attributes.statusCode]">
+                <logger level="WARN" message="#[output text/plain --- 'Got $(attributes.statusCode) from $(vars.callPath). Will retry.']"/>
+                <raise-error type="ORDER:TRANSIENT" description="#[output text/plain --- 'Upstream returned $(attributes.statusCode)']"/>
+            </when>
+        </choice>
+    </sub-flow>
+</mule>

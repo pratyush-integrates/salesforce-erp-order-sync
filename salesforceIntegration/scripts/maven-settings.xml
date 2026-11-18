@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Exchange login for deploy-cloudhub.ps1. Maven reads the values from the environment, so nothing secret is in this file. -->
+<settings>
+  <servers>
+    <server>
+      <id>anypoint-exchange-v3</id>
+      <username>~~~Client~~~</username>
+      <password>${env.ANYPOINT_CLIENT_ID}~?~${env.ANYPOINT_CLIENT_SECRET}</password>
+    </server>
+  </servers>
+</settings>

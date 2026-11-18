@@ -1,0 +1,16 @@
+http:
+  port: "8084"
+mcp:
+  host: "127.0.0.1"
+  port: "8085"
+orderProcess:
+  protocol: "HTTP"
+  host: "localhost"
+  port: "8083"
+  timeoutMs: "30000"
+# API Manager instance. Only used on CloudHub, where the platform credentials are present.
+api:
+  id: "0"
+# Sent to the APIs this one calls. Set on CloudHub, where their URLs are public.
+internal:
+  authorization: "none"
