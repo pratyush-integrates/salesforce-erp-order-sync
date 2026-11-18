@@ -11,7 +11,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
 $repo = Split-Path $root -Parent
-$dir = if ($Api -eq 'order-process-api') { "$repo\$Api" } else { "$root\apis\$Api" }
+$dir = "$root\apis\$Api"
 
 Get-Content "$repo\.env" | Where-Object { $_ -match '^\s*[^#\s][^=]*=' } | ForEach-Object {
     $name, $value = $_ -split '=', 2

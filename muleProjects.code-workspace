@@ -1,9 +1,9 @@
 {
     "folders": [
-        { "name": "salesforce-sys-api", "path": "salesforce-sys-api" },
-        { "name": "erp-sys-api", "path": "erp-sys-api" },
-        { "name": "order-process-api", "path": "order-process-api" },
-        { "name": "order-status-exp-api", "path": "order-status-exp-api" }
+        { "name": "salesforce-sys-api", "path": "salesforceIntegration/apis/salesforce-sys-api" },
+        { "name": "erp-sys-api", "path": "salesforceIntegration/apis/erp-sys-api" },
+        { "name": "order-process-api", "path": "salesforceIntegration/apis/order-process-api" },
+        { "name": "order-status-exp-api", "path": "salesforceIntegration/apis/order-status-exp-api" }
     ],
     "settings": {
         "files.exclude": {

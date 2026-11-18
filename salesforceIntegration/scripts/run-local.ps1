@@ -15,7 +15,7 @@ $repo = Split-Path $root -Parent
 $apis = @{
     'salesforce-sys-api' = "$root\apis\salesforce-sys-api"
     'erp-sys-api' = "$root\apis\erp-sys-api"
-    'order-process-api' = "$repo\order-process-api"
+    'order-process-api' = "$root\apis\order-process-api"
     'order-status-exp-api' = "$root\apis\order-status-exp-api"
 }
 

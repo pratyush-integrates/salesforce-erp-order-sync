@@ -65,12 +65,13 @@ The event carries only the Opportunity ID, so the process API always reads curre
 ## Repo layout
 
 ```text
-order-process-api/        Process API: event listener, order logic, MUnit tests
 salesforceIntegration/
-  apis/salesforce-sys-api/    System API: read Opportunities, write ERP results
-  apis/erp-sys-api/           System API: customers and sales orders. Hides the ERP
-  apis/order-status-exp-api/  Experience API: read-only REST and MCP tools
-  docs/                   Design, runbook, platform setup, Agentforce note
+  apis/                       All four Mule apps
+    salesforce-sys-api/       System API: read Opportunities, write ERP results
+    erp-sys-api/              System API: customers and sales orders. Hides the ERP
+    order-process-api/        Process API: event listener, order logic, MUnit tests
+    order-status-exp-api/     Experience API: read-only REST and MCP tools
+  docs/                   Design, runbook, platform setup, Agentforce note, diagrams
   mock-erp/               The mock ERP and its tests
   salesforce/             Salesforce metadata
   scripts/                Run, seed, test and publish

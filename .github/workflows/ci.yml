@@ -28,7 +28,7 @@ jobs:
         include:
           - { api: salesforce-sys-api, dir: salesforceIntegration/apis/salesforce-sys-api }
           - { api: erp-sys-api, dir: salesforceIntegration/apis/erp-sys-api }
-          - { api: order-process-api, dir: order-process-api }
+          - { api: order-process-api, dir: salesforceIntegration/apis/order-process-api }
           - { api: order-status-exp-api, dir: salesforceIntegration/apis/order-status-exp-api }
     steps:
       - uses: actions/checkout@v4
@@ -79,7 +79,7 @@ jobs:
         include:
           - { api: salesforce-sys-api, dir: salesforceIntegration/apis/salesforce-sys-api }
           - { api: erp-sys-api, dir: salesforceIntegration/apis/erp-sys-api }
-          - { api: order-process-api, dir: order-process-api }
+          - { api: order-process-api, dir: salesforceIntegration/apis/order-process-api }
           - { api: order-status-exp-api, dir: salesforceIntegration/apis/order-status-exp-api }
     steps: &deploy-steps
       - uses: actions/checkout@v4
@@ -133,6 +133,6 @@ jobs:
         include:
           - { api: salesforce-sys-api, dir: salesforceIntegration/apis/salesforce-sys-api }
           - { api: erp-sys-api, dir: salesforceIntegration/apis/erp-sys-api }
-          - { api: order-process-api, dir: order-process-api }
+          - { api: order-process-api, dir: salesforceIntegration/apis/order-process-api }
           - { api: order-status-exp-api, dir: salesforceIntegration/apis/order-status-exp-api }
     steps: *deploy-steps
